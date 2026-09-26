@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments & Virtual Envs
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Datasets (large files exceeding GitHub limits)
+dataset/
+data/
+
+# Model checkpoints & large serialized artifacts
+*.pkl
+*.pickle
+*.joblib
+*.bin
+*.model
+*.parquet
+*.feather
+
+# Output files & generated predictions
+output/*
+!output/.gitkeep
+
+# Submissions & archives
+*.zip
+*.tar.gz
+*.rar
+
+# Logs & temp files
+*.log
+scratch/
+.pytest_cache/
+.coverage
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
