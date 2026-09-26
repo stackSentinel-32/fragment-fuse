@@ -31,7 +31,13 @@ from evaluate import (
     evaluate_predictions,
     print_f05_report,
 )
-from features import build_feature_matrix, load_feature_chunks, FEATURE_COLUMNS
+from features import (
+    build_feature_matrix,
+    load_feature_chunks,
+    FEATURE_COLUMNS,
+    precompute_embeddings,
+    add_embedding_feature,
+)
 
 
 # ----------------------------------------------------------------
@@ -47,10 +53,16 @@ def prepare_training_data(
     val_fraction: float = 0.1,
     output_dir: str = "output",
     nrows_s2_s3: Optional[int] = None,
+    use_embeddings: bool = False,
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    embedding_batch_size: int = 512,
+    s1_emb_path: Optional[str] = None,
+    cand_emb_path: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load sources, split S1 into train/val (stratified by singleton status),
     build feature matrices for both splits, save as parquet, return both DataFrames.
+    Optionally computes or loads multilingual sentence embeddings to produce 'embed_cosine'.
     """
     os.makedirs(output_dir, exist_ok=True)
     t0 = time.time()
@@ -100,6 +112,36 @@ def prepare_training_data(
     s3_df = load_and_preprocess(s3_path, nrows=nrows_s2_s3)
     print(f"  S3: {len(s3_df):,} rows")
 
+    # ---- Precompute / load embeddings if requested ----
+    s1_embeddings = None
+    cand_embeddings = None
+    if use_embeddings:
+        print("\n=== Precomputing / Loading Multilingual Sentence Embeddings ===")
+        # S1 embeddings
+        s1_emb_file = s1_emb_path or os.path.join(output_dir, "train_s1_embeddings.npy")
+        if os.path.isfile(s1_emb_file):
+            print(f"  Loading S1 embeddings from {s1_emb_file}...")
+            s1_embeddings = np.load(s1_emb_file)
+        else:
+            print(f"  Precomputing S1 embeddings ({len(s1_df):,} entities)...")
+            s1_embeddings = precompute_embeddings(
+                s1_df, model_name=embedding_model, batch_size=embedding_batch_size, output_path=s1_emb_file
+            )
+
+        # Candidate embeddings (S2 + S3)
+        cand_emb_file = cand_emb_path or os.path.join(output_dir, "train_cand_embeddings.npy")
+        if os.path.isfile(cand_emb_file):
+            print(f"  Loading candidate embeddings from {cand_emb_file}...")
+            cand_embeddings = np.load(cand_emb_file)
+        else:
+            print(f"  Precomputing S2 embeddings ({len(s2_df):,} entities)...")
+            s2_emb = precompute_embeddings(s2_df, model_name=embedding_model, batch_size=embedding_batch_size)
+            print(f"  Precomputing S3 embeddings ({len(s3_df):,} entities)...")
+            s3_emb = precompute_embeddings(s3_df, model_name=embedding_model, batch_size=embedding_batch_size)
+            cand_embeddings = np.vstack([s2_emb, s3_emb])
+            np.save(cand_emb_file, cand_embeddings)
+            print(f"  Saved candidate embeddings to {cand_emb_file}")
+
     # ---- Build feature matrices ----
     train_out = os.path.join(output_dir, "train_features.parquet")
     val_out = os.path.join(output_dir, "val_features.parquet")
@@ -109,6 +151,9 @@ def prepare_training_data(
         s1_df, train_cands, s2_df, s3_df,
         ground_truth=gt,
         output_path=train_out,
+        s1_embeddings=s1_embeddings,
+        cand_embeddings=cand_embeddings,
+        use_embeddings=use_embeddings,
     )
     # Re-load all chunks if written to disk
     if os.path.isfile(train_out.replace(".parquet", "_chunk0000.parquet")):
@@ -119,6 +164,9 @@ def prepare_training_data(
         s1_df, val_cands, s2_df, s3_df,
         ground_truth=gt,
         output_path=val_out,
+        s1_embeddings=s1_embeddings,
+        cand_embeddings=cand_embeddings,
+        use_embeddings=use_embeddings,
     )
     if os.path.isfile(val_out.replace(".parquet", "_chunk0000.parquet")):
         val_df = load_feature_chunks(val_out)
@@ -130,10 +178,11 @@ def prepare_training_data(
     pos_rate_train = train_df["label"].mean() if "label" in train_df else 0
     pos_rate_val = val_df["label"].mean() if "label" in val_df else 0
 
+    active_feats = [c for c in FEATURE_COLUMNS if c in train_df.columns]
     print(f"\n=== Training Data Summary ===")
     print(f"  Train pairs : {n_train:,}  (positive rate: {pos_rate_train*100:.2f}%)")
     print(f"  Val   pairs : {n_val:,}  (positive rate: {pos_rate_val*100:.2f}%)")
-    print(f"  Features    : {len(FEATURE_COLUMNS)}")
+    print(f"  Features    : {len(active_feats)} ({', '.join(active_feats)})")
     print(f"  Elapsed     : {elapsed:.1f}s")
 
     return train_df, val_df
@@ -327,6 +376,17 @@ if __name__ == "__main__":
                         help="Limit S2/S3 rows loaded (for fast testing)")
     parser.add_argument("--skip-data-prep", action="store_true",
                         help="Skip data prep and load existing parquet files")
+    parser.add_argument("--use-embeddings", action="store_true",
+                        help="Add multilingual sentence embedding cosine similarity feature ('embed_cosine')")
+    parser.add_argument("--embedding-model",
+                        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                        help="HuggingFace model for multilingual sentence embeddings")
+    parser.add_argument("--embedding-batch-size", type=int, default=512,
+                        help="Batch size for embedding inference")
+    parser.add_argument("--s1-embeddings", default=None,
+                        help="Path to precomputed S1 embeddings .npy file")
+    parser.add_argument("--cand-embeddings", default=None,
+                        help="Path to precomputed candidate embeddings .npy file")
     args = parser.parse_args()
 
     # ---- Step 1: Load candidate pairs ----
@@ -362,6 +422,11 @@ if __name__ == "__main__":
             val_fraction=args.val_fraction,
             output_dir=args.output_dir,
             nrows_s2_s3=args.limit_s2_s3,
+            use_embeddings=args.use_embeddings,
+            embedding_model=args.embedding_model,
+            embedding_batch_size=args.embedding_batch_size,
+            s1_emb_path=args.s1_embeddings,
+            cand_emb_path=args.cand_embeddings,
         )
 
     # ---- Step 3: Train model ----
