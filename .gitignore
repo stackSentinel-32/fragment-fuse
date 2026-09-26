@@ -24,8 +24,11 @@ data/
 *.feather
 
 # Output files & generated predictions
+output/
 output/*
-!output/.gitkeep
+
+# Documentation template
+Documentation_template.md
 
 # Submissions & archives
 *.zip

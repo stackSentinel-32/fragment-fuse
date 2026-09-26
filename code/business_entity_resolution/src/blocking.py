@@ -48,10 +48,10 @@ WEIGHT_ADDR_TOK = 2     # individual non-generic address token
 WEIGHT_BIGRAM = 1       # character bigram fallback
 
 # Per-tier posting-list size caps (skip lists larger than this — too noisy)
-CAP_EXACT = 50000
-CAP_NAME_TOK = 15000
-CAP_ADDR_TOK = 20000
-CAP_BIGRAM = 25000
+CAP_EXACT = 5000
+CAP_NAME_TOK = 1000
+CAP_ADDR_TOK = 1000
+CAP_BIGRAM = 1000
 
 
 class BlockingIndex:
