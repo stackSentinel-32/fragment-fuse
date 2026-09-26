@@ -6,5 +6,7 @@ numpy
 scipy
 tqdm
 sentence-transformers>=2.2
+transformers>=4.30
+datasets>=2.14
 torch
 pickle5; python_version < "3.8"
